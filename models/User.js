@@ -7,6 +7,7 @@ const userSchema = new mongoose.Schema({
   userOrderQuantity: { type: String, required: false },
   userOrderPaymentID: { type: String, required: false },
   userOrderAmount:{type:String, default:null},
+  userOrderType:{type:String, default:null},
   singleorderPaymentStatus:{type:Boolean,default:false},
   subscriptionPaymentStatus:{type:Boolean,default:false},
   subscription: { type: Boolean, default : false},
@@ -20,6 +21,8 @@ const userSchema = new mongoose.Schema({
   planId:{type:String, required:false},
   deliveryDate:{type:Date,default:Date.now()},
   nextReminderDate:{type:Date , default: Date.now()},
+  delivered:{type:Boolean, default:false},
+  remindersent:{type:Boolean, default:true}
 });
 
 module.exports = mongoose.model('User', userSchema);

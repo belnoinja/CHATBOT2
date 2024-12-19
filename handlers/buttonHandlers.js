@@ -20,6 +20,8 @@ exports.handleBuyGhee = async (userPhone) => {
 };
 
 exports.handleBuyGheeQuantity = async(userPhone, buttonId) => {
+  const user= await User.findOne({phone:userPhone});
+
   // Handle A2_ghee selection
   if (buttonId === "A2_ghee") {
     const quantityMessage = {
@@ -50,6 +52,7 @@ exports.handleBuyGheeQuantity = async(userPhone, buttonId) => {
       ]
     };
 
+
     const planOrderMessage = {
       text: "🎉 Subscribe to our monthly plan and enjoy **5% off** + **NO delivery fee**! 🚚✨ Click here to learn more!",
       buttons: [
@@ -63,8 +66,10 @@ exports.handleBuyGheeQuantity = async(userPhone, buttonId) => {
     // Send quantity options for A2 Ghee
     await sendMessage(userPhone, quantityMessage);
     await sendMessage(userPhone, customOrderMessage);
-    return await sendMessage(userPhone, planOrderMessage);
-    
+    if(!user.subscriptionPaymentStatus){
+        await sendMessage(userPhone, planOrderMessage);
+    }
+    return;
   }
 
   // Handle buffalo selection
@@ -111,10 +116,12 @@ exports.handleBuyGheeQuantity = async(userPhone, buttonId) => {
     // Send quantity options for Buffalo Ghee
     await sendMessage(userPhone, quantityMessage);
     await sendMessage(userPhone, customOrderMessage);
-    return await sendMessage(userPhone, planOrderMessage);
-    
+    if(!user.subscriptionPaymentStatus){
+      await sendMessage(userPhone, planOrderMessage);
   }
-  return;
+  return;    
+  }
+ 
 };
 
 

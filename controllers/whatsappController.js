@@ -6,6 +6,7 @@ const { generatePaymentLinkWithDivision } = require("../razorpay/razorpay.js");
 const Razorpay = require("razorpay");
 const PhoneNumber = require("../models/phoneNumber.js");
 const { use } = require("../app.js");
+require('dotenv').config();
 
 // Timeout duration in milliseconds (3 minutes)
 const TIMEOUT_DURATION = 3 * 60 * 1000;
@@ -71,7 +72,7 @@ exports.receiveMessage = async (req, res) => {
       const timeout = setTimeout(async () => {
         await resetUserState(userPhone);
         const timeoutMessage = {
-          text: "⏳ *Oops, your session timed out!* Don’t worry, just type 'Hi' to restart! 🚀",
+          text: "⏳ *Oops, your session timed out!* Don’t worry, just type 'Hi' to restart! ",
         };
         await sendMessage(userPhone, timeoutMessage);
         userTimeouts.delete(userPhone); // Clean up the map
@@ -189,7 +190,7 @@ exports.receiveMessage = async (req, res) => {
           const reminderDate = new Date(newDeliveryDate);
           reminderDate.setMonth(reminderDate.getMonth() + 1);
           user.nextReminderDate = reminderDate;
-          
+
           await user.save();
 
           try {
@@ -219,7 +220,7 @@ exports.receiveMessage = async (req, res) => {
 
             // Step 3: Confirm success
             const message = {
-              text: `🎉 Delivery Date Of your Order has been successfully updated!\n Your new Delivery date is ${user.deliveryDate.toDateString()}. Type 'Hi' to go back`,
+              text: `🎉 Delivery Date Of your Order has been successfully updated!\n Your new Delivery date is ${user.deliveryDate.toLocaleDateString()}. Type 'Hi' to go back`,
             };
             return await sendMessage(userPhone, message);
           } catch (error) {
@@ -263,13 +264,14 @@ exports.receiveMessage = async (req, res) => {
         const newQuantity = parseInt(messageText, 10);
 
         // Validate the quantity format (must be a positive integer)
-        if (isNaN(newQuantity) || newQuantity <= 0) {
+        if (isNaN(newQuantity) || newQuantity <= 0 || newQuantity % 500 != 0) {
           const errorMessage = {
-            text: "⚠️ Please enter a valid quantity in ml.\nIt must be divisible by 500.",
+            text: "⚠ Please enter a valid quantity in ml.\nIt must be divisible by 500.",
           };
           await sendMessage(userPhone, errorMessage);
         }
         const user = await User.findOne({ phone: userPhone });
+        let newplanId;
         let Price = 0;
         if (user.subscriptionType === "A2 Cow") {
           let x = newQuantity;
@@ -284,6 +286,26 @@ exports.receiveMessage = async (req, res) => {
           const n3 = Math.floor(x2 / 500);
           // console.log(n3);
           Price = n1 * 7837 + n2 * 1614 + n3 * 854;
+
+          const planIdMap = {
+            500: process.env.PLAN_A2_500,
+            1000: process.env.PLAN_A2_1000, // 1L
+            1500: process.env.PLAN_A2_1500,
+            2000: process.env.PLAN_A2_2000,
+            2500: process.env.PLAN_A2_2500,
+            3000: process.env.PLAN_A2_3000,
+            3500: process.env.PLAN_A2_3500,
+            4000: process.env.PLAN_A2_4000,
+            4500: process.env.PLAN_A2_4500, // 4.5L
+            5000: process.env.PLAN_A2_5000, // 5L
+          };
+
+          // Determine the plan_id from the map based on the amountMultiplier
+          if (x > 5000) {
+            newplanId = process.env.SUBSCRIPTION_ID_A2; // Use default for amounts greater than 5L
+          } else {
+            newplanId = planIdMap[x]; // Default to 1L plan if not found
+          }
         } else {
           let x = newQuantity;
           const n1 = Math.floor(x / 5000);
@@ -297,16 +319,31 @@ exports.receiveMessage = async (req, res) => {
           const n3 = Math.floor(x2 / 500);
           // console.log(n3);
           Price = n1 * 6887 + n2 * 1424 + n3 * 759;
+
+          const planIdMap = {
+            500: process.env.PLAN_B_500,
+            1000: process.env.PLAN_B_1000, // 1L
+            1500: process.env.PLAN_B_1500,
+            2000: process.env.PLAN_B_2000,
+            2500: process.env.PLAN_B_2500,
+            3000: process.env.PLAN_B_3000,
+            3500: process.env.PLAN_B_3500,
+            4000: process.env.PLAN_B_4000,
+            4500: process.env.PLAN_B_4500, // 4.5L
+            5000: process.env.PLAN_B_5000, // 5L
+          };
+
+          // Determine the plan_id from the map based on the amountMultiplier
+          if (x > 5000) {
+            newplanId = process.env.SUBSCRIPTION_ID_BUFFALO; // Use default for amounts greater than 5L
+          } else {
+            newplanId = planIdMap[x]; // Default to 1L plan if not found
+          }
         }
-        // const user = await User.findOneAndUpdate(
-        //   { phone: userPhone }, // Filter: find user by phone number
-        //   { subscriptionQuantity: newQuantity }, // Update: set the new address value
-        //   { new: true } // Option to return the updated user document
-        // );
-        //   const user = await User.findOne({ phone: userPhone });
+
         user.subscriptionQuantity = newQuantity;
         user.subscriptionAmount = String(
-          amountMultiplier > 5000 ? Math.round(Price / 100) * 100 : Price
+          newQuantity > 5000 ? Math.round(Price / 100) * 100 : Price
         );
         await user.save();
         if (user) {
@@ -316,20 +353,35 @@ exports.receiveMessage = async (req, res) => {
           try {
             // Step 1: Cancel the old subscription if it exists
             if (user.subscriptionId) {
-              await razorpayInstance.subscriptions.cancel(user.subscriptionId);
+              const currentSubscription =
+                await razorpayInstance.subscriptions.fetch(user.subscriptionId);
+
+              if (currentSubscription.status !== "cancelled") {
+                // Cancel the old subscription if it exists and is not canceled
+                await razorpayInstance.subscriptions.cancel(
+                  user.subscriptionId
+                );
+              } else {
+                const msg = [
+                  { text: "Your subscription is already cancelled!" },
+                ];
+                await sendMessage(msg, user.phoneNumber);
+              }
             }
 
             // Step 2: Create a new subscription with the updated date
             const newSubscription = await razorpayInstance.subscriptions.create(
               {
-                plan_id: user.planId, // Use the existing plan ID from the user data
+                plan_id: newplanId, // Use the existing plan ID from the user data
                 customer_notify: 1,
                 total_count: 12, // Example: 12-month subscription
-                quantity: amountMultiplier > 5000 ? Math.round(Price / 100) : 1, // Use calculated price or default quantity
+                quantity: newQuantity > 5000 ? Math.round(Price / 100) : 1, // Use calculated price or default quantity
                 //   start_at: Math.floor(subscriptionDate.getTime() / 1000), // UNIX timestamp
                 notes: {
                   phone: user.phone,
                   description: "Subscription with updated start date",
+                  amount:
+                    newQuantity > 5000 ? Math.round(Price / 100) * 100 : Price,
                 },
               }
             );
@@ -340,9 +392,11 @@ exports.receiveMessage = async (req, res) => {
 
             // Step 3: Confirm success
             const message = {
-              text: `🎉 Your subscription has been updated successfully! The new start date is ${subscriptionDate.toDateString()}.\nPlease complete your payment here: ${
-                newSubscription.short_url
-              } 💳`,
+              text: `🎉 Your subscription has been updated successfully! The new start date is ${subscriptionDate.toLocaleDateString()}.\nThe new Quantity is *${
+                user.subscriptionQuantity
+              }ml*.\nPlease complete your payment of ₹${
+                user.subscriptionAmount
+              } here: ${newSubscription.short_url} 💳`,
             };
             return await sendMessage(userPhone, message);
           } catch (error) {
@@ -375,20 +429,26 @@ exports.receiveMessage = async (req, res) => {
             // Attempt to cancel the subscription using Razorpay API
             try {
               await razorpayInstance.subscriptions.cancel(user.subscriptionId);
-
-              const msg = {
-                text: `🎉 *Subscription Cancelled Successfully!* ✅\nWe're sorry to see you go, but thank you for using our service! 💙\nIf you ever want to continue, just type *Hi* and we’ll get you started again! 👋😊`
-              };
+              let msg;
+              if (user.delivered) {
+                 msg = {
+                  text: `🎉 *Subscription Cancelled Successfully!* ✅\nWe're sorry to see you go, but thank you for using our service! 💙\nIf you ever want to continue, just type *Hi* and we’ll get you started again! 👋😊`,
+                };
+              } else {
+                const msg = {
+                  text: `🚚 Your order is already in transit and will be delivered by ${user.deliveryDate.toLocaleDateString()} this month. 📦\n\nWe're processing the cancellation of your subscription, and it will be fully canceled after your delivery. Thank you for using our service! 💙 If you wish to restart your subscription at any point, just type *Hi* and we’ll be happy to assist you again! 👋😊`,
+                };
+              }
               await sendMessage(userPhone, msg);
-              user.subscriptionStartDate= Date.now();
-              user.subscriptionAmount="";
-              user.deliveryDate= Date.now();
-              user.nextReminderDate= Date.now();
-              user.subscriptionQuantity="";
-              user.subscriptionType="";
+              // user.subscriptionStartDate = Date.now();
+              user.subscriptionAmount += " cancelled";
+              // user.deliveryDate = Date.now();
+              user.nextReminderDate = Date.now();
+              user.subscriptionQuantity += " cancelled";
+              user.subscriptionType += " cancelled";
               user.subscription = false;
-              user.subscriptionId = "";
-              user.planId = "";
+              user.subscriptionId =null;
+              user.planId += " cancelled";
               user.subscriptionPaymentStatus = false;
               return await user.save();
             } catch (error) {}
@@ -461,7 +521,7 @@ exports.receiveMessage = async (req, res) => {
             return await sendMessage(userPhone, prompt);
           } else if (buttonId === "edit_quantity") {
             const message1 = {
-              text: "🔢 Please enter the quantity you'd like to purchase.",
+              text: "🔢 Please enter the quantity in ml (Divisible by 500)",
             };
 
             await sendMessage(userPhone, message1);
@@ -485,17 +545,13 @@ exports.receiveMessage = async (req, res) => {
 
             if (state.planType.includes("plan")) {
               const message = {
-                text: `🏠 Please provide your address to complete your subscription. \n💰 Amount to be paid: ₹${
-                  user.subscriptionAmount || "N/A"
-                } *Delivery fees Applied \n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+                text: `🏠 Please provide your address to complete your subscription. \n \n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
               };
 
               await sendMessage(userPhone, message);
             } else {
               const message = {
-                text: `🏠 Please provide your address to complete your payment. \n💰 Amount to be paid: ₹${
-                  user.userOrderAmount || "N/A"
-                } *Delivery fees Applied\n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+                text: `🏠 Please provide your address to complete your payment. \n \n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
               };
 
               await sendMessage(userPhone, message);
@@ -520,17 +576,7 @@ exports.receiveMessage = async (req, res) => {
             return await sendMessage(userPhone, buttonMessage);
           } else if (buttonId === "faq") {
             const msg1 = {
-              text: `*🌟 An interesting fact about our ghee that signifies its purity!!* \n*Collapse*\n\nWe wanted to share some interesting information about our beloved Bilona Ghee. Did you know that our ghee's color changes depending on its temperature? When it's frozen, it appears white, and when it's warm, it turns into a beautiful yellow hue. This natural color transformation is a testament to the purity of our product - we never add any artificial colors or additives. Just pure goodness, straight from our heart to your home. 💛\n
-                      
-              *👅 How is the taste of your ghee different from any other ghee in the market?* \n*Collapse*\n\nOur ghee is obtained by churning curd and not cream (malai). So the nutritional content is more as compared to others. Therefore our ghee tastes a lot tastier and aromatic because it preserves the all-natural nourishment of ghee. 🌱\n
-            
-              *🐄 What are cows being fed?* \n*Collapse*\n\nOur cows graze freely and are given natural fodder. The buttermilk obtained in ghee making is also given to our cows. We believe in a cruelty-free environment, and therefore we do not inject hormones in cows. 🐾\n
-            
-              *🔍 How can we identify pure cow ghee?* \n*Collapse*\n\nThe easiest method to check the purity is to do a pan test. Add a teaspoon of ghee to a pan and heat it. If the ghee starts melting immediately and turns dark brown, it is pure. However, if it takes time to melt and is yellow in color, then it is adulterated. 🔥\n
-            
-              *💧 What should the consistency of my ghee be?* \n*Collapse*\n\nGenerally, the consistency of ghee depends on the temperature at which you store it. At room temperature, it usually remains soft, and during winters, it solidifies. Depending on the temperature outside the jar, this process may happen quickly or slowly. It is perfectly normal for ghee to be liquid, solid, or a combination of consistencies. ❄️🌞\n
-            
-              *💸 Why is Nani Bilona Ghee costly as compared to other ghee?* \n*Collapse*\n\nNani's Bilona Ghee is a bit pricier because we make it using an ancient method called Bilona. This means we need about 28 to 35 liters of milk just to make 1 liter of ghee. The reason? Cow milk doesn't have much fat, so it takes more milk to make the ghee. Even though it's more work and needs more milk, we do it this way to keep the ghee pure and full of goodness. So, while it might cost a bit more, you're getting a ghee that's really special and made with care. ❤️`,
+              text: `*🌟 An interesting fact about our ghee that signifies its purity!!* \nWe wanted to share some interesting information about our beloved Bilona Ghee. Did you know that our ghee's color changes depending on its temperature? When it's frozen, it appears white, and when it's warm, it turns into a beautiful yellow hue. This natural color transformation is a testament to the purity of our product - we never add any artificial colors or additives. Just pure goodness, straight from our heart to your home. 💛\n*🔥How is the taste of your ghee different from any other ghee in the market?* \nOur ghee is obtained by churning curd and not cream (malai). So the nutritional content is more as compared to others. Therefore our ghee tastes a lot tastier and aromatic because it preserves the all-natural nourishment of ghee. 🌱\n\n*🐄 What are cows being fed?* \nOur cows graze freely and are given natural fodder. The buttermilk obtained in ghee making is also given to our cows. We believe in a cruelty-free environment, and therefore we do not inject hormones in cows. 🐾\n\n*🔍 How can we identify pure cow ghee?* \nThe easiest method to check the purity is to do a pan test. Add a teaspoon of ghee to a pan and heat it. If the ghee starts melting immediately and turns dark brown, it is pure. However, if it takes time to melt and is yellow in color, then it is adulterated. 🔥\n\n*💧 What should the consistency of my ghee be?* \nGenerally, the consistency of ghee depends on the temperature at which you store it. At room temperature, it usually remains soft, and during winters, it solidifies. Depending on the temperature outside the jar, this process may happen quickly or slowly. It is perfectly normal for ghee to be liquid, solid, or a combination of consistencies. ❄️🌞\n\n*💸 Why is Nani Bilona Ghee costly as compared to other ghee?* \nNani's Bilona Ghee is a bit pricier because we make it using an ancient method called Bilona. This means we need about 28 to 35 liters of milk just to make 1 liter of ghee. The reason? Cow milk doesn't have much fat, so it takes more milk to make the ghee. Even though it's more work and needs more milk, we do it this way to keep the ghee pure and full of goodness. So, while it might cost a bit more, you're getting a ghee that's really special and made with care. ❤️`,
             };
 
             await sendMessage(userPhone, msg1);
@@ -576,7 +622,7 @@ exports.receiveMessage = async (req, res) => {
               }
 
               const message = {
-                text: "💰 Enter the amount you'd like to order (must be divisible by 500).",
+                text: "🍯 Please enter the amount you'd like to order in ml(must be divisible by 500).",
               };
 
               return await sendMessage(userPhone, message);
@@ -631,17 +677,17 @@ exports.receiveMessage = async (req, res) => {
               }
 
               const message = {
-                text: "💸 Enter the amount you'd like to order (must be divisible by 500).",
+                text: "🍯 Please enter the amount you'd like to order in ml(must be divisible by 500).",
               };
 
               return await sendMessage(userPhone, message);
             }
             const user = await User.findOne({ phone: userPhone });
             const state = await State.findOne({ userPhone });
-            if (amount === 1049) user.userOrderQuantity = "500ml A2";
-            else if (amount === 1849) user.userOrderQuantity = "1L A2";
-            else if (amount === 8500) user.userOrderQuantity = "5L A2";
-
+            if (amount === 1049) user.userOrderQuantity = "500";
+            else if (amount === 1849) user.userOrderQuantity = "1000";
+            else if (amount === 8500) user.userOrderQuantity = "5000";
+            user.userOrderType = "A2";
             state.userAmount = amount;
             state.planType = "A2";
             await state.save();
@@ -649,11 +695,7 @@ exports.receiveMessage = async (req, res) => {
 
             if (user.address) {
               const buttonMessage = {
-                text: `📍 Would you like to continue with this address for delivery?\n\n🏡 *Address:* ${
-                  user.address
-                }\n💰 *Amount to be Paid:* ₹${
-                  amount || "N/A"
-                } *Delivery fees Applied\n\n✅ *Confirm* or provide a new address to proceed!`,
+                text: `📍 Would you like to continue with this address for delivery?\n\n🏡 *Address:* ${user.address}\n✅ *Confirm* or provide a new address to proceed!`,
                 buttons: [
                   {
                     id: "old_address",
@@ -669,9 +711,7 @@ exports.receiveMessage = async (req, res) => {
               return await sendMessage(userPhone, buttonMessage);
             }
             const message = {
-              text: `🏠 Please provide your address to complete your payment. \n💰 Amount to be paid: ₹${
-                user.userOrderAmount || "N/A"
-              }*Delivery fees Applied \n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+              text: `🏠 Please provide your address to complete your payment. \n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
             };
             state.useradd = "awaiting_address";
             await state.save();
@@ -682,7 +722,7 @@ exports.receiveMessage = async (req, res) => {
 
             if (buttonId === "small_planbuffalo") amount *= 500;
             else if (buttonId === "medium_planbuffalo") amount *= 1000;
-            else if (buttonId === "large_planbuffalo") amount *= 2000;
+            else if (buttonId === "large_planbuffalo") amount *= 5000;
             else if (buttonId === "custom_planbuffalo") {
               const state = await State.findOne({ userPhone });
               if (state) {
@@ -691,7 +731,7 @@ exports.receiveMessage = async (req, res) => {
               }
 
               const message = {
-                text: "💰 Please enter the amount you'd like to order (must be divisible by 500).",
+                text: "🍯 Please enter the amount you'd like to order in ml(must be divisible by 500).",
               };
 
               return await sendMessage(userPhone, message);
@@ -704,13 +744,7 @@ exports.receiveMessage = async (req, res) => {
             await state.save();
             if (user.address) {
               const buttonMessage = {
-                text: `📍 Hi ${
-                  user.name
-                }! Would you like to continue with this address for delivery?\n\n🏡 *Address:* ${
-                  user.address
-                }\n💰 *Amount to be Paid:* ₹${
-                  amount || "N/A"
-                }\n\n✅ *Confirm* or provide a new address to proceed!`,
+                text: `📍 Hi ${user.name}! Would you like to continue with this address for delivery?\n\n🏡 *Address:* ${user.address}\n\n✅ *Confirm* or provide a new address to proceed!`,
                 buttons: [
                   {
                     id: "old_address",
@@ -726,9 +760,7 @@ exports.receiveMessage = async (req, res) => {
               return await sendMessage(userPhone, buttonMessage);
             }
             const message = {
-              text: `🏠 Please provide your address to complete your payment. \n💰 Amount to be paid: ₹${
-                user.userOrderAmount || "N/A"
-              } *Delivery fees Applied\n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+              text: `🏠 Please provide your address to complete your payment. \n \n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
             };
 
             if (state) {
@@ -754,17 +786,17 @@ exports.receiveMessage = async (req, res) => {
               }
 
               const message = {
-                text: "💸 Please enter the amount you'd like to order (must be divisible by 500).",
+                text: "🍯 Please enter the amount you'd like to order in *ml*(must be divisible by 500).",
               };
 
               return await sendMessage(userPhone, message);
             }
             const user = await User.findOne({ phone: userPhone });
             const state = await State.findOne({ userPhone });
-            if (amount === 949) user.userOrderQuantity = "500ml A2";
-            else if (amount === 1649) user.userOrderQuantity = "1L A2";
-            else if (amount === 7500) user.userOrderQuantity = "5L A2";
-
+            if (amount === 949) user.userOrderQuantity = "500";
+            else if (amount === 1649) user.userOrderQuantity = "1000";
+            else if (amount === 7500) user.userOrderQuantity = "5000";
+            user.userOrderType = "Buffalo";
             state.userAmount = amount;
             state.planType = "buffalo";
             await state.save();
@@ -772,11 +804,7 @@ exports.receiveMessage = async (req, res) => {
 
             if (user.address) {
               const buttonMessage = {
-                text: `📍 Would you like to continue with this address for delivery?\n\n🏡 *Address:* ${
-                  user.address
-                }\n💰 *Amount to be Paid:* ₹${
-                  amount || "N/A"
-                } *Delivery fees Applied\n\n✅ `,
+                text: `📍 Would you like to continue with this address for delivery?\n\n🏡 *Address:* ${user.address}\n  `,
                 buttons: [
                   {
                     id: "old_address",
@@ -792,9 +820,7 @@ exports.receiveMessage = async (req, res) => {
               return await sendMessage(userPhone, buttonMessage);
             }
             const message = {
-              text: `🏠 Please provide your address to complete your payment. \n💰 Amount to be paid: ₹${
-                user.userOrderAmount || "N/A"
-              } *Delivery fees Applied\n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+              text: `🏠 Please provide your address to complete your payment. \n \n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
             };
 
             if (state) {
@@ -809,9 +835,7 @@ exports.receiveMessage = async (req, res) => {
               state.useradd = "awaiting_edit_address";
               await state.save();
               const message = {
-                text: `🏠 Please provide your address to complete your payment. \n💰 Amount to be paid: ₹${
-                  user.userOrderAmount || "N/A"
-                }*Delivery fees Applied \n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+                text: `🏠 Please provide your address to complete your payment. \n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
               };
 
               return await sendMessage(userPhone, message);
@@ -819,7 +843,7 @@ exports.receiveMessage = async (req, res) => {
               state.useradd = "awaiting_same_address";
               await state.save();
               const message = {
-                text: "📍 Continuing with the same address. Please hold on...",
+                text: "📍 We’re continuing with the same address for your delivery. Please hold on while we process your request... 🚚",
               };
 
               await sendMessage(userPhone, message);
@@ -840,11 +864,13 @@ exports.receiveMessage = async (req, res) => {
             const msg = {
               text: `📦 Your current plan is: ${
                 user.subscriptionType
-              } Ghee with a quantity of ${user.subscriptionQuantity}ml.\nStarted on: ${user.subscriptionStartDate.toDateString()}\nScheduled delivery: ${deliveryDate.toDateString()}\n
+              } Ghee with a quantity of ${
+                user.subscriptionQuantity
+              }ml.\nStarted on: ${user.subscriptionStartDate.toLocaleDateString()}\nScheduled delivery: ${deliveryDate.toLocaleDateString()}\n
             *Total amount*: ₹ ${user.subscriptionAmount}`,
               buttons: [
                 { id: "edit_date", title: "Edit Date" },
-                { id: "edit_quantity", title: "Edit Qty" },
+                // { id: "edit_quantity", title: "Edit Qty" },
                 { id: "edit_address_existing", title: "Edit Address" },
               ],
             };
@@ -922,10 +948,10 @@ async function handleAddress(userPhone) {
 async function handleCustomAmountInput_A2(messageText, userPhone) {
   let amount = parseInt(messageText); // Convert input to a number
 
-  if (isNaN(amount) || amount <= 0 || amount % 500 != 0) {
+  if (isNaN(amount) || amount <= 0 || amount % 500 != 0 || amount > 5000) {
     // Send error message if the input is not a valid positive number
     const errorMessage = {
-      text: "⚠️ Please enter a valid amount. Ensure it’s a number.",
+      text: "⚠️ Please enter a valid amount in ml. Ensure it’s a number divsible by 500. \n*It must be less than 5000*",
     };
     return await sendMessage(userPhone, errorMessage);
   }
@@ -952,6 +978,7 @@ async function handleCustomAmountInput_A2(messageText, userPhone) {
 
   const user = await User.findOne({ phone: userPhone });
   const state = await State.findOne({ userPhone });
+  user.userOrderType = "A2";
   user.userOrderQuantity = quantity;
   state.userState = null;
   state.userAmount = totalPrice;
@@ -960,11 +987,7 @@ async function handleCustomAmountInput_A2(messageText, userPhone) {
   await user.save();
   if (user.address) {
     const buttonMessage = {
-      text: `📍 Would you like to continue with this address for delivery?\n\n🏡 *Address:* ${
-        user.address
-      }\n💰 *Amount to be Paid:* ₹${
-        totalPrice || "N/A"
-      }*Delivery fees Applied \n\n✅ `,
+      text: `📍 Would you like to continue with this address for delivery?\n\n🏡 *Address:* ${user.address}\n`,
       buttons: [
         {
           id: "old_address",
@@ -979,9 +1002,7 @@ async function handleCustomAmountInput_A2(messageText, userPhone) {
     return await sendMessage(userPhone, buttonMessage);
   }
   const message = {
-    text: `🏠 Please provide your address to complete your subscription. \n💰 Amount to be paid: ₹${
-      totalPrice || "N/A"
-    } *Delivery fees Applied *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`, // Adding amount
+    text: `🏠 Please provide your address to complete your subscription. \n *Delivery fees Applied *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`, // Adding amount
   };
 
   if (state) {
@@ -994,10 +1015,10 @@ async function handleCustomAmountInput_A2(messageText, userPhone) {
 async function handleCustomAmountInput_buffalo(messageText, userPhone) {
   let amount = parseInt(messageText); // Convert input to a number
 
-  if (isNaN(amount) || amount <= 0 || amount % 500 != 0) {
+  if (isNaN(amount) || amount <= 0 || amount % 500 != 0 || amount > 5000) {
     // Send error message if the input is not a valid positive number
     const errorMessage = {
-      text: "⚠️ Please enter a valid amount (divisible by 500).",
+      text: "⚠️ Please enter a valid amount in ml. Ensure it’s a number divsible by 500. \n*It must be less than 5000*",
     };
     return await sendMessage(userPhone, errorMessage);
   }
@@ -1023,6 +1044,7 @@ async function handleCustomAmountInput_buffalo(messageText, userPhone) {
 
   const user = await User.findOne({ phone: userPhone });
   const state = await State.findOne({ userPhone });
+  user.userOrderType = "Buffalo";
   user.userOrderQuantity = quantity;
   state.userState = null;
   state.userAmount = totalPrice;
@@ -1032,11 +1054,7 @@ async function handleCustomAmountInput_buffalo(messageText, userPhone) {
   await user.save();
   if (user.address) {
     const buttonMessage = {
-      text: `📍 Would you like to continue with this address for delivery?\n\n🏡 *Address:* ${
-        user.address
-      }\n💰 *Amount to be Paid:* ₹${
-        totalPrice || "N/A"
-      }*Delivery fees Applied \n\n✅ *Confirm* or provide a new address to proceed!`,
+      text: `📍 Would you like to continue with this address for delivery?\n\n🏡 *Address:* ${user.address}\n**Confirm* or provide a new address to proceed!`,
       buttons: [
         {
           id: "old_address",
@@ -1051,9 +1069,7 @@ async function handleCustomAmountInput_buffalo(messageText, userPhone) {
     return await sendMessage(userPhone, buttonMessage);
   }
   const message = {
-    text: `🏠 Please provide your address to complete your subscription. \n💰 Amount to be paid: ₹${
-      totalPrice || "N/A"
-    } *Delivery fees Applied\n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+    text: `🏠 Please provide your address to complete your subscription. \n \n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
   };
   if (state) {
     state.useradd = "awaiting_address";
@@ -1067,9 +1083,9 @@ async function handleCustomAmountInput_plan_buffalo(messageText, userPhone) {
   let amount = parseInt(messageText); // Convert input to a number
   amount *= 1;
 
-  if (isNaN(amount) || amount <= 0 || amount % 500 !== 0) {
+  if (isNaN(amount) || amount <= 0 || amount % 500 !== 0 || amount > 5000) {
     const errorMessage = {
-      text: "⚠️ Please enter a valid amount (divisible by 500).",
+      text: "⚠️ Please enter a valid amount in ml. Ensure it’s a number divsible by 500. *It must be less than 5000*",
     };
     return await sendMessage(userPhone, errorMessage);
   }
@@ -1082,7 +1098,7 @@ async function handleCustomAmountInput_plan_buffalo(messageText, userPhone) {
   await state.save();
   if (user.address) {
     const buttonMessage = {
-      text: `📍 Want to continue with your current address: ${user.address}?  *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+      text: `📍 Want to continue with your current address: ${user.address}? \n *Address Format:*\nName:\nHouse No/Street:\nCity:\nState:\nPincode:`,
       buttons: [
         {
           id: "old_address",
@@ -1097,9 +1113,7 @@ async function handleCustomAmountInput_plan_buffalo(messageText, userPhone) {
     return await sendMessage(userPhone, buttonMessage);
   }
   const message = {
-    text: `🏠 Please provide your address to complete your subscription. \n💰 Amount to be paid: ₹${
-      user.subscriptionAmount || "N/A"
-    }\n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+    text: `🏠 Please provide your address to complete your subscription. \n *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
   };
   if (state) {
     state.useradd = "awaiting_address";
@@ -1113,9 +1127,9 @@ async function handleCustomAmountInput_plan_A2(messageText, userPhone) {
   let amount = parseInt(messageText); // Convert input to a number
   amount *= 1;
 
-  if (isNaN(amount) || amount <= 0 || amount % 500 !== 0) {
+  if (isNaN(amount) || amount <= 0 || amount % 500 !== 0 || amount > 5000) {
     const errorMessage = {
-      text: "⚠️ Please enter a valid amount (divisible by 500).",
+      text: "⚠️ Please enter a valid amount in ml. Ensure it’s a number divsible by 500. *It must be less than 5000*",
     };
     return await sendMessage(userPhone, errorMessage);
   }
@@ -1128,7 +1142,7 @@ async function handleCustomAmountInput_plan_A2(messageText, userPhone) {
   await state.save();
   if (user.address) {
     const buttonMessage = {
-      text: `📍 Want to continue with your current address: ${user.address}?  *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+      text: `📍 Want to continue with your current address: ${user.address}?  *Address Format:*\nName:\nHouse No/Street:\nCity:\nState:\nPincode:`,
       buttons: [
         {
           id: "old_address",
@@ -1143,9 +1157,7 @@ async function handleCustomAmountInput_plan_A2(messageText, userPhone) {
     return await sendMessage(userPhone, buttonMessage);
   }
   const message = {
-    text: `🏠 Please provide your address to complete your subscription. \n💰 Amount to be paid: ₹${
-      user.subscriptionAmount || "N/A"
-    }\n\n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+    text: `🏠 Please provide your address to complete your subscription. \n📋 *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
   };
   if (state) {
     state.useradd = "awaiting_address";
@@ -1168,9 +1180,33 @@ async function createPayment_A2(userPhone, amount) {
       userPhone,
       description
     );
+    const user = await User.findOne({ phone: userPhone });
+    const baseAmount = amount; // This includes the delivery fee in ₹.
+    const userOrderQuantity = parseInt(user.userOrderQuantity, 10); // Convert quantity to integer (in ml).
+    let deliveryFee = 0;
+
+    // Determine delivery fee based on quantity.
+    if (userOrderQuantity >= 6000) {
+      deliveryFee = 500; // ₹500 for ≥6000ml.
+    } else if (userOrderQuantity >= 3000) {
+      deliveryFee = 250; // ₹250 for >3000ml.
+    } else if (baseAmount < 3000) {
+      // Less than ₹3000.
+      deliveryFee = 150; // ₹150 for orders less than ₹3000.
+    }
+
+    // Deduct delivery fee from base amount to calculate product cost.
+    const productCost = baseAmount - deliveryFee;
 
     const message = {
-      text: `Complete your purchase here 🛒: ${paymentLink} 💳`,
+      text: `🧾 *Your Bill Details*:\n
+    Product Quantity: *${userOrderQuantity}ml* A2 Cow ghee\n
+    Product Cost: *₹${productCost.toFixed(2)}*\n
+    Delivery Fee: *₹${deliveryFee.toFixed(2)}*\n
+    ——————————————\n
+    *Total Amount: ₹${baseAmount.toFixed(2)}*\n
+   ——————————————\n
+    You can pay here: ${paymentLink}`,
     };
 
     const state = await State.findOne({ userPhone });
@@ -1196,10 +1232,33 @@ async function createPayment_buffalo(userPhone, amount) {
       userPhone,
       description
     );
-    const message = {
-      text: `✨ Please complete your purchase here: ${paymentLink} 🛒\nThank you for choosing us! 💖`,
-    };
+    const user = await User.findOne({ phone: userPhone });
+    const baseAmount = amount; // This includes the delivery fee in ₹.
+    const userOrderQuantity = parseInt(user.userOrderQuantity, 10); // Convert quantity to integer (in ml).
+    let deliveryFee = 0;
 
+    // Determine delivery fee based on quantity.
+    if (userOrderQuantity >= 6000) {
+      deliveryFee = 500; // ₹500 for ≥6000ml.
+    } else if (userOrderQuantity >= 3000) {
+      deliveryFee = 250; // ₹250 for >3000ml.
+    } else if (baseAmount < 3000) {
+      // Less than ₹3000.
+      deliveryFee = 150; // ₹150 for orders less than ₹3000.
+    }
+
+    // Deduct delivery fee from base amount to calculate product cost.
+    const productCost = baseAmount - deliveryFee;
+
+    const message = {
+      text: `🧾 *Your Bill Details*:\nProduct Quantity:Indian Buffalo Ghee *${userOrderQuantity}ml* Indian Buffalo Ghee\nProduct Cost: *₹${productCost.toFixed(
+        2
+      )}*\nDelivery Fee: *₹${deliveryFee.toFixed(
+        2
+      )}*\n——————————————\n*Total Amount: ₹${baseAmount.toFixed(
+        2
+      )}*\n——————————————\nYou can pay here: ${paymentLink}`,
+    };
     const state = await State.findOne({ userPhone });
     state.userState = null;
     state.useradd = null;
@@ -1241,6 +1300,7 @@ async function createSubscriptionA2(userPhone, amountMultiplier) {
     4500: process.env.PLAN_A2_4500, // 4.5L
     5000: process.env.PLAN_A2_5000, // 5L
   };
+console.log(process.env.PLAN_A2_1000);
 
   // Determine the plan_id from the map based on the amountMultiplier
   let planId;
@@ -1260,7 +1320,7 @@ async function createSubscriptionA2(userPhone, amountMultiplier) {
       notes: {
         phone: userPhone,
         description: description,
-        amount: Price / 100,
+        amount: amountMultiplier > 5000 ? Math.round(Price / 100) * 100 : Price,
       },
     });
 
@@ -1291,11 +1351,13 @@ async function createSubscriptionA2(userPhone, amountMultiplier) {
       amountMultiplier > 5000 ? Math.round(Price / 100) * 100 : Price;
     // Send subscription confirmation message to the user
     const message = {
-      text: `You have now subscribed to Our Monthly Plan of A2 Cow Ghee. 🎉\n\nYour subscription will start on ${user.subscriptionStartDate.toDateString()} and will be delivered to the address: ${
-        user.address
-      } 📦\n\nYour first delivery is expected on or around ${user.deliveryDate.toDateString()}.\n\nTotal Price: ₹${newPrice}\n\nPlease complete your payment here to activate: ${
-        subscription.short_url
-      } 💳`,
+      text:
+        `You have now subscribed to **Our Monthly Plan of A2 Cow Ghee. 🎉**\n\n` +
+        `Your subscription will start on **${user.subscriptionStartDate.toLocaleDateString()}**. Every month, ₹${newPrice} will be automatically deducted from your bank account on the subscription date. 💳\n\n` +
+        `Your first delivery is expected on or around **${user.deliveryDate.toLocaleDateString()}**. 📦\n\n` +
+        `**Total Price: ₹${newPrice}**\n\n` +
+        `Please complete your payment here to activate your subscription: **${subscription.short_url}**\n\n` +
+        `**Note:** Payment confirmation and details will be sent to you within **3-5 minutes**. Please hold on. 🙏`,
     };
 
     await sendMessage(userPhone, message);
@@ -1353,17 +1415,37 @@ async function createSubscriptionBuffalo(userPhone, amountMultiplier) {
 
   let Price = n1 * 6887 + n2 * 1424 + n3 * 759;
 
+  const planIdMap = {
+    500: process.env.PLAN_B_500,
+    1000: process.env.PLAN_B_1000, // 1L
+    1500: process.env.PLAN_B_1500,
+    2000: process.env.PLAN_B_2000,
+    2500: process.env.PLAN_B_2500,
+    3000: process.env.PLAN_B_3000,
+    3500: process.env.PLAN_B_3500,
+    4000: process.env.PLAN_B_4000,
+    4500: process.env.PLAN_B_4500, // 4.5L
+    5000: process.env.PLAN_B_5000, // 5L
+  };
+
+  // Determine the plan_id from the map based on the amountMultiplier
+  let planId;
+  if (amountMultiplier > 5000) {
+    planId = process.env.SUBSCRIPTION_ID_BUFFALO; // Use default for amounts greater than 5L
+  } else {
+    planId = planIdMap[amountMultiplier]; // Default to 1L plan if not found
+  }
   try {
     // Create the subscription using Razorpay
     const subscription = await razorpayInstance.subscriptions.create({
-      plan_id: process.env.SUBSCRIPTION_ID_A2,
+      plan_id: planId,
       customer_notify: 1, // This will still notify the customer (default behavior)
       total_count: 12, // Example: 12-month subscription
-      quantity: Math.round(Price / 100),
+      quantity: amountMultiplier > 5000 ? Math.round(Price / 100) : 1, // Use calculated price or default quantity
       notes: {
         phone: userPhone,
         description: description,
-        amount: Price,
+        amount: amountMultiplier > 5000 ? Math.round(Price / 100) * 100 : Price,
       },
     });
 
@@ -1390,14 +1472,20 @@ async function createSubscriptionBuffalo(userPhone, amountMultiplier) {
     // Save the calculated reminder date
     user.nextReminderDate = reminderDate;
     await user.save();
-
+    let newPrice =
+      amountMultiplier > 5000 ? Math.round(Price / 100) * 100 : Price;
     // Send subscription confirmation message to the user
     const message = {
-      text: `You have now subscribed to Our Monthly Plan of Buffalo Ghee. 🎉\nYour subscription will start on ${user.subscriptionStartDate.toDateString()} and will be delivered to the address: ${
-        user.address
-      } 📦\n\nYour first delivery is expected on or around ${user.deliveryDate.toDateString()}.\n\nTotal Price: ₹${Price}\n\nPlease complete your payment here to activate: ${
-        subscription.short_url
-      } 💳`,
+      text:
+        `You have now subscribed to **Our Monthly Plan of Indian Buffalo Ghee. 🎉**\n\n` +
+        `Your subscription will start on **${user.subscriptionStartDate.toLocaleDateString()}** and will be delivered to the address: **${
+          user.address
+        }** 📦\n\n` +
+        `Your first delivery is expected on or around **${user.deliveryDate.toLocaleDateString()}**.\n` +
+        `**Total Price: ₹${newPrice}**\n` +
+        `Please complete your payment here to activate: **${subscription.short_url} 💳**\n\n` +
+        `**Note:** Payment confirmation and details will be sent to you within **3-5 minutes**. Please hold on. 🙏\n
+              *You can view your plan and edit its details anytime by typing 'Hi' and clicking on *View Your Plans**`,
     };
 
     await sendMessage(userPhone, message);
@@ -1455,7 +1543,7 @@ async function handleAddressInput(messageText, userPhone) {
     state.useradd = null;
     await state.save();
     const rewriteAddress = {
-      text: `📍 Want to continue with your address: ${user.address}?\n\nOr would you like to edit your address? ✏️  *Address Format:*\nName: [Your Name]\nHouse No/Street: [Your House/Street]\nCity: [Your City]\nState: [Your State]\nPincode: [Your Pincode]`,
+      text: `📍 Want to continue with your address: ${user.address}?\n\nOr would you like to edit your address? ✏️\n  *Address Format:*\nName:\nHouse No/Street:\nCity:\nState:\nPincode:`,
       buttons: [
         {
           id: "edit_address",
@@ -1478,8 +1566,12 @@ async function handleAddressInput(messageText, userPhone) {
     let message;
 
     if (state.planType === "plan_buffalo" || state.planType === "plan_A2") {
-      message = {
-        text: `Thank you for providing your address! 🙏\nNow, please let us know the day (1-28) you'd like to have your order delivered. 📅`,
+      const today = new Date();
+      const nextMonth = new Date(today);
+      nextMonth.setMonth(today.getMonth() + 1);
+
+      const message = {
+        text: `Thank you for providing your address! 🙏\nNow, please select a day (1-28) for your delivery. You can choose a day from *${today.toLocaleDateString()}* onwards, or pick a day before today in the next month *(${nextMonth.toLocaleDateString()})*. 📅`,
       };
 
       // Update user state to await subscription date
@@ -1492,7 +1584,7 @@ async function handleAddressInput(messageText, userPhone) {
       message = {
         text: `Thank you for sharing your address! 🙏\nYour order will reach you in *4-5 days*. 🚚💨 We appreciate your patience! 😊`,
       };
-      await sendMessage(userPhone, message);
+      //  await sendMessage(userPhone, message);
       if (state.planType === "A2")
         await createPayment_A2(userPhone, state.userAmount);
       if (state.planType === "buffalo")
@@ -1504,56 +1596,152 @@ async function handleAddressInput(messageText, userPhone) {
   return;
 }
 
-// Handle subscription date input
+// // Handle subscription date input
+// async function handleSubscriptionDateInput(messageText, userPhone) {
+//   const dayOfMonth = parseInt(messageText, 10);
+
+//   // Validate that the input is a valid day of the month (1-31)
+//   if (isNaN(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 29) {
+//     const errorMessage = {
+//       text: "Please enter a valid day of the month (e.g., 1-28).",
+//     };
+//     return await sendMessage(userPhone, errorMessage);
+//   }
+
+//   // Find the user in the database
+//   const user = await User.findOne({ phone: userPhone });
+//   const state = await State.findOne({ userPhone });
+//   state.useradd = null;
+//   if (user) {
+//     // Determine the next delivery date based on the entered day
+//     const today = new Date();
+//     let deliveryDate = new Date(
+//       today.getFullYear(),
+//       today.getMonth(),
+//       dayOfMonth
+//     );
+
+//     // If the chosen day has already passed this month, set delivery to next month
+//     if (deliveryDate < today) {
+//       deliveryDate.setMonth(today.getMonth() + 1);
+//     }
+
+//     const subscriptionDate = new Date();
+
+//     // Save the user's preferred day and the calculated first delivery date
+//     user.deliveryDate = deliveryDate;
+//     user.subscriptionStartDate = subscriptionDate;
+//     await user.save();
+//   }
+
+//   // Send confirmation message to the user
+//   const message = {
+//     text: `Your subscription deliveries will begin on ${user.subscriptionStartDate.toLocaleDateString()}.\n\nFrom then on, deliveries will be made on the ${dayOfMonth} of each month.`,
+//   };
+//   await sendMessage(userPhone, message);
+
+//   // Create subscription after collecting all required info
+//   if (state.planType === "plan_A2") {
+//     await createSubscriptionA2(userPhone, state.userAmount);
+//   } else if (state.planType === "plan_buffalo") {
+//     await createSubscriptionBuffalo(userPhone, state.userAmount);
+//   }
+//   state.planType = null;
+//   return await state.save();
+// }
+
 async function handleSubscriptionDateInput(messageText, userPhone) {
-  const dayOfMonth = parseInt(messageText, 10);
+  try {
+    const dayOfMonth = parseInt(messageText, 10);
 
-  // Validate that the input is a valid day of the month (1-31)
-  if (isNaN(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
-    const errorMessage = {
-      text: "Please enter a valid day of the month (e.g., 1-28).",
-    };
-    return await sendMessage(userPhone, errorMessage);
-  }
+    // Validate that the input is a valid day of the month (1-28)
+    if (isNaN(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 28) {
+      const today = new Date();
+      const fourDaysLater = new Date(today);
+      fourDaysLater.setDate(today.getDate() + 4);
+      const errorMessage = {
+        text: `Please pick a day between 1 and 28 that is at least 4 days from today (${today.toLocaleDateString()}). You can choose any day from ${fourDaysLater.toLocaleDateString()} onwards.`,
+      };
+      return await sendMessage(userPhone, errorMessage);
+    }
 
-  // Find the user in the database
-  const user = await User.findOne({ phone: userPhone });
-  const state = await State.findOne({ userPhone });
-  state.useradd = null;
-  if (user) {
-    // Determine the next delivery date based on the entered day
     const today = new Date();
-    let deliveryDate = new Date(
-      today.getFullYear(),
-      today.getMonth(),
+    const currentDay = today.getDate();
+    const currentMonth = today.getMonth();
+    const currentYear = today.getFullYear();
+
+    // Calculate the earliest allowed date (4 days from now)
+    const minAllowedDate = new Date(currentYear, currentMonth, currentDay + 4);
+
+    // Determine if the entered date is in the current month or the next month
+    const deliveryDateCurrentMonth = new Date(
+      currentYear,
+      currentMonth,
+      dayOfMonth
+    );
+    const deliveryDateNextMonth = new Date(
+      currentYear,
+      currentMonth + 1,
       dayOfMonth
     );
 
-    // If the chosen day has already passed this month, set delivery to next month
-    if (deliveryDate < today) {
-      deliveryDate.setMonth(today.getMonth() + 1);
+    let selectedDate;
+
+    // Allow delivery date in the current month only if it's after minAllowedDate
+    if (deliveryDateCurrentMonth >= minAllowedDate) {
+      selectedDate = deliveryDateCurrentMonth;
+    }
+    // Allow delivery date in the next month if it's before the current date of the next month
+    else if (dayOfMonth < currentDay) {
+      selectedDate = deliveryDateNextMonth;
     }
 
-    const subscriptionDate = new Date();
+    // If no valid date is found, send an error message
+    if (!selectedDate) {
+      const today = new Date();
+      const fourDaysLater = new Date(today);
+      fourDaysLater.setDate(today.getDate() + 4);
 
-    // Save the user's preferred day and the calculated first delivery date
-    user.deliveryDate = deliveryDate;
-    user.subscriptionStartDate = subscriptionDate;
-    await user.save();
+      const errorMessage = {
+        text: `*Invalid date* \n Please choose a delivery date that is at least 4 days from today (${today.toLocaleDateString()}) or a date before today in the next month.`,
+      };
+
+      return await sendMessage(userPhone, errorMessage);
+    }
+
+    // Save selected date in the database
+    const user = await User.findOne({ phone: userPhone });
+    const state = await State.findOne({ userPhone });
+    state.useradd = null;
+
+    if (user) {
+      const subscriptionDate = new Date();
+
+      // Save user's preferred day and the calculated first delivery date
+      user.deliveryDate = selectedDate;
+      user.subscriptionStartDate = subscriptionDate;
+      await user.save();
+    }
+
+    // Send confirmation message to the user
+    const message = {
+      text: `Your subscription deliveries will begin on ${selectedDate.toLocaleDateString()}.\n\nFrom then on, deliveries will be made on the ${dayOfMonth} of each month.`,
+    };
+    await sendMessage(userPhone, message);
+
+    // Create subscription after collecting all required info
+    if (state.planType === "plan_A2") {
+      await createSubscriptionA2(userPhone, state.userAmount);
+    } else if (state.planType === "plan_buffalo") {
+      await createSubscriptionBuffalo(userPhone, state.userAmount);
+    }
+    state.planType = null;
+    return await state.save();
+  } catch (error) {
+    console.error("Error handling subscription date input:", error);
+    const errorMessage = {
+      text: "Oops! Something went wrong while processing your request. Please try again later.",
+    };
+    await sendMessage(userPhone, errorMessage);
   }
-
-  // Send confirmation message to the user
-  const message = {
-    text: `Your subscription deliveries will begin on ${user.subscriptionStartDate.toDateString()}.\n\nFrom then on, deliveries will be made on the ${dayOfMonth} of each month.`,
-  };
-  await sendMessage(userPhone, message);
-
-  // Create subscription after collecting all required info
-  if (state.planType === "plan_A2") {
-    await createSubscriptionA2(userPhone, state.userAmount);
-  } else if (state.planType === "plan_buffalo") {
-    await createSubscriptionBuffalo(userPhone, state.userAmount);
-  }
-  state.planType = null;
-  return await state.save();
 }
