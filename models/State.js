@@ -8,6 +8,7 @@ const state = new mongoose.Schema({
     planType: { type: String,default:null },
     useredit: { type: String,default:null },
     username : { type: String,default:null },
+    adminstate:{type:String, default:null},
     name: {
         type: String,
         default:null,

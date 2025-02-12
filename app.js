@@ -5,8 +5,10 @@ const axios = require('axios');
 const db = require('./config/db.js');
 const cron = require('node-cron'); // For cron scheduling
 require('dotenv').config(); // Load environment variables
+const cors = require('cors');
 
 const app = express();
+app.use(cors());
 
 // Middleware
 app.use(bodyParser.json());
@@ -23,13 +25,13 @@ const PhoneNumber = require('./models/phoneNumber');
 
 
 // Schedule the task to run every day at 10:00 AM (adjust the time as needed)
-cron.schedule('9 10 * * *', async () => {
+cron.schedule('0 10 * * *', async () => {
     await sendBroadcastMessage();
 });
 
 // Start cron jobs for subscription reminders
 const scheduleSubscriptionReminders = require('./reminder/scheduler.js');
-scheduleSubscriptionReminders();
+// scheduleSubscriptionReminders();
 
 // Routes
 const whatsappRoutes = require('./routes/whatsappRoutes');

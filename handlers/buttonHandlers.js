@@ -20,6 +20,8 @@ exports.handleBuyGhee = async (userPhone) => {
 };
 
 exports.handleBuyGheeQuantity = async(userPhone, buttonId) => {
+  const user= await User.findOne({phone:userPhone});
+
   // Handle A2_ghee selection
   if (buttonId === "A2_ghee") {
     const quantityMessage = {
@@ -50,21 +52,24 @@ exports.handleBuyGheeQuantity = async(userPhone, buttonId) => {
       ]
     };
 
-    const planOrderMessage = {
-      text: "🎉 Subscribe to our monthly plan and enjoy **5% off** + **NO delivery fee**! 🚚✨ Click here to learn more!",
-      buttons: [
-        {
-          id: "plan_A2",
-          title: "Monthly Plan"
-        },
-      ]
-    }
+
+    // const planOrderMessage = {
+    //   text: "🎉 Subscribe to our monthly plan and enjoy **5% off** + **NO delivery fee**! 🚚✨ Click here to learn more!",
+    //   buttons: [
+    //     {
+    //       id: "plan_A2",
+    //       title: "Monthly Plan"
+    //     },
+    //   ]
+    // }
 
     // Send quantity options for A2 Ghee
     await sendMessage(userPhone, quantityMessage);
     await sendMessage(userPhone, customOrderMessage);
-    return await sendMessage(userPhone, planOrderMessage);
-    
+    // if(!user.subscriptionPaymentStatus){
+    //     await sendMessage(userPhone, planOrderMessage);
+    // }
+    return;
   }
 
   // Handle buffalo selection
@@ -98,32 +103,34 @@ exports.handleBuyGheeQuantity = async(userPhone, buttonId) => {
       ]
     };
 
-    const planOrderMessage = {
-      text: "🎉 Subscribe to our monthly plan and enjoy **5% off** + **NO delivery fee**! 🚚✨ Click here to learn more!",
-      buttons: [
-        {
-          id: "plan_buffalo",
-          title: "Monthly Plan"
-        },
-      ]
-    }
+    // const planOrderMessage = {
+    //   text: "🎉 Subscribe to our monthly plan and enjoy **5% off** + **NO delivery fee**! 🚚✨ Click here to learn more!",
+    //   buttons: [
+    //     {
+    //       id: "plan_buffalo",
+    //       title: "Monthly Plan"
+    //     },
+    //   ]
+    // }
 
     // Send quantity options for Buffalo Ghee
     await sendMessage(userPhone, quantityMessage);
     await sendMessage(userPhone, customOrderMessage);
-    return await sendMessage(userPhone, planOrderMessage);
-    
+  //   if(!user.subscriptionPaymentStatus){
+  //     await sendMessage(userPhone, planOrderMessage);
+  // }
+  return;    
   }
-  return;
+ 
 };
 
 
 exports.handleCustomerSupport = async (userPhone) => {
 
   const adminPhone = process.env.ADMIN_PHONE || "YOUR_ADMIN_PHONE_NUMBER"; 
-  
+  const user= await User.findOne({phone:userPhone});
   const adminMessage = {
-    text: `Customer Support required for : ${userPhone}.`,
+    text: `Customer Support required for  name:${user.name} phone : ${userPhone}.`,
   };
 
 

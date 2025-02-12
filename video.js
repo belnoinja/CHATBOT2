@@ -3,7 +3,7 @@ const app = express();
 const path = require('path');
 
 // Serve static files from the "video" folder
-app.use('/video', express.static(path.join(__dirname, 'ghee')));
+// app.use('/video', express.static(path.join(__dirname, 'ghee')));
 
 // Example endpoint
 app.get('/', (req, res) => {
